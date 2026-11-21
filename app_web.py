@@ -5,7 +5,6 @@ from fpdf import FPDF
 
 st.set_page_config(page_title="Registro Lezioni di Pianoforte", page_icon="🎹", layout="wide")
 
-# Inizializza l'archivio nella sessione del browser
 if "allievi" not in st.session_state:
     st.session_state.allievi = {}
 if "allievo_selezionato" not in st.session_state:
@@ -66,7 +65,6 @@ def genera_pdf_bytes(nome_allievo, dati):
         
     return bytes(pdf.output())
 
-# --- BARRA LATERALE ---
 with st.sidebar:
     st.title("🎹 Allievi")
     
@@ -121,7 +119,6 @@ with st.sidebar:
             except Exception:
                 st.error("File non valido.")
 
-# --- AREA PRINCIPALE ---
 st.title("Registro Lezioni di Pianoforte")
 
 allievo = st.session_state.allievo_selezionato
@@ -131,7 +128,7 @@ if not allievo or allievo not in st.session_state.allievi:
 else:
     dati = st.session_state.allievi[allievo]
     
-    col_titolo, col_storico = st.columns([2, 1])
+    col_titolo, col_storico = st.columns(2)
     with col_titolo:
         st.subheader(f"Scheda di: {allievo}")
     with col_storico:
@@ -140,31 +137,28 @@ else:
             opzioni = ["Scheda attuale"] + [f"{i+1}. {item.get('data_salvataggio', 'Senza data')}" for i, item in enumerate(storico)]
             scelta_storico = st.selectbox("Storico lezioni:", opzioni)
             if scelta_storico != "Scheda attuale":
-                idx = int(scelta_storico.split(".")[0]) - 1
+                parti = scelta_storico.split(".")
+                idx = int(parti.pop(0)) - 1
                 dati = storico[idx]
         else:
             st.selectbox("Storico lezioni:", ["Nessuna lezione archiviata"], disabled=True)
 
-    # Riga Info
     c1, c2, c3, c4 = st.columns(4)
     livello = c1.text_input("Livello / Corso:", value=dati.get("livello", ""), placeholder="Es. Base, 2 Anno...")
     orario = c2.text_input("Giorno e Ora Fissa:", value=dati.get("orario", ""), placeholder="Es. Giovedi 16:30")
     telefono = c3.text_input("Telefono / Contatto:", value=dati.get("telefono", ""), placeholder="Es. 333 1234567")
     data_lez = c4.text_input("Data Lezione:", value=dati.get("data", ""), placeholder="Es. 20/11/2026")
 
-    # Riga Tastiera
     st.markdown("---")
     k1, k2, k3 = st.columns(3)
     bpm = k1.text_input("Metronomo (BPM):", value=dati.get("bpm", ""), placeholder="Es. 72 -> 84 BPM")
     pedale = k2.text_input("Uso Pedale:", value=dati.get("pedale", ""), placeholder="Es. Legato / Mezzo pedale")
     tocco = k3.text_input("Focus Tocco (Tasti Pesati):", value=dati.get("tocco", ""), placeholder="Es. Peso braccio / Polso morbido")
 
-    # Aree di testo
     tecnica = st.text_area("Tecnica, Scale ed Esercizi:", value=dati.get("tecnica", ""), height=100)
     brani = st.text_area("Brani in Studio e Obiettivi della Lezione:", value=dati.get("brani", ""), height=130)
     compiti = st.text_area("Compiti per Casa (ogni riga diventa una casella da spuntare sul PDF):", value=dati.get("compiti", ""), height=130)
 
-    # Dizionario aggiornato
     scheda_aggiornata = {
         "livello": livello.strip(),
         "orario": orario.strip(),
@@ -179,7 +173,6 @@ else:
         "storico": st.session_state.allievi[allievo].get("storico", [])
     }
 
-    # Barra Bottoni
     b1, b2, b3, b4 = st.columns([1.2, 1.5, 1.5, 1])
     
     if b1.button("💾 Salva Scheda", use_container_width=True, type="primary"):
