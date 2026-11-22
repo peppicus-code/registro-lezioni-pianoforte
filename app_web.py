@@ -223,7 +223,7 @@ with st.sidebar:
 
     st.divider()
     
-        with st.expander("🔑 Cambia la mia Password"):
+    with st.expander("🔑 Cambia la mia Password"):
         nuova_pass = st.text_input("Nuova password:", type="password", key="change_pwd_1")
         conferma_pass = st.text_input("Ripeti nuova password:", type="password", key="change_pwd_2")
         if st.button("Aggiorna Password", use_container_width=True):
