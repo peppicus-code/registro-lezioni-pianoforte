@@ -218,8 +218,7 @@ with st.sidebar:
     else:
         allievo_selezionato = st.session_state["utente_loggato"]
         st.title("🎹 Area Allievo")
-        st.success(f"Benvenuto/a,
-**{allievo_selezionato}**")
+        st.success(f"Benvenuto/a, **{allievo_selezionato}**")
         st.caption("Stai visualizzando esclusivamente il tuo piano di studio personale.")
 
     st.divider()
