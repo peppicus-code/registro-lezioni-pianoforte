@@ -1,21 +1,83 @@
 import streamlit as st
 import json
+import requests
 from datetime import datetime
 from fpdf import FPDF
 
+# Configurazione pagina
 st.set_page_config(page_title="Registro Lezioni di Pianoforte", page_icon="🎹", layout="wide")
 
-if "allievi" not in st.session_state:
-    st.session_state.allievi = {}
-if "allievo_selezionato" not in st.session_state:
-    st.session_state.allievo_selezionato = None
+# --- 1. GESTIONE LOGIN TRAMITE SECRETS ---
+def controlla_accesso():
+    if "ruolo" not in st.session_state:
+        st.session_state["ruolo"] = None
 
+    if st.session_state["ruolo"] is None:
+        st.title("🎹 Registro Lezioni di Pianoforte")
+        st.subheader("Accesso Riservato")
+        
+        pwd = st.text_input("Inserisci la password di accesso:", type="password")
+        if st.button("Accedi", type="primary"):
+            if pwd == st.secrets["password_maestro"]:
+                st.session_state["ruolo"] = "maestro"
+                st.rerun()
+            elif pwd == st.secrets["password_studente"]:
+                st.session_state["ruolo"] = "studente"
+                st.rerun()
+            else:
+                st.error("❌ Password errata. Riprova.")
+        st.stop()
+
+controlla_accesso()
+is_maestro = (st.session_state["ruolo"] == "maestro")
+
+# --- 2. DATABASE PERMANENTE SU GITHUB GIST ---
+GIST_ID = st.secrets["gist_id"]
+GITHUB_TOKEN = st.secrets["github_token"]
+FILENAME = "archivio_allievi.json"
+HEADERS = {
+    "Authorization": f"token {GITHUB_TOKEN}",
+    "Accept": "application/vnd.github.v3+json"
+}
+
+def carica_dati():
+    if "allievi" not in st.session_state:
+        try:
+            url = f"https://github.com{GIST_ID}"
+            res = requests.get(url, headers=HEADERS)
+            if res.status_code == 200:
+                contenuto = res.json()["files"][FILENAME]["content"]
+                st.session_state["allievi"] = json.loads(contenuto)
+            else:
+                st.session_state["allievi"] = {}
+        except Exception as e:
+            st.error(f"Errore di connessione al database: {e}")
+            st.session_state["allievi"] = {}
+    return st.session_state["allievi"]
+
+def salva_dati_cloud(dati_aggiornati):
+    st.session_state["allievi"] = dati_aggiornati
+    url = f"https://github.com{GIST_ID}"
+    payload = {
+        "files": {
+            FILENAME: {
+                "content": json.dumps(dati_aggiornati, ensure_ascii=False, indent=4)
+            }
+        }
+    }
+    res = requests.patch(url, headers=HEADERS, json=payload)
+    if res.status_code != 200:
+        st.error("⚠️ Errore durante il salvataggio online!")
+
+allievi = carica_dati()
+
+# --- 3. GENERAZIONE PDF ---
 def pulisci_testo_pdf(testo):
     for k, v in {"’": "'", "“": '"', "”": '"', "–": "-", "—": "-", "…": "..."}.items():
         testo = testo.replace(k, v)
     return testo.encode("latin-1", "replace").decode("latin-1")
 
-def genera_pdf_bytes(nome_allievo, dati):
+def crea_pdf_bytes(nome_allievo, dati):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=15)
@@ -65,140 +127,103 @@ def genera_pdf_bytes(nome_allievo, dati):
         
     return bytes(pdf.output())
 
+# --- 4. BARRA LATERALE ---
 with st.sidebar:
     st.title("🎹 Allievi")
+    st.caption(f"Accesso effettuato come: **{st.session_state['ruolo'].upper()}**")
     
-    nuovo_nome = st.text_input("Nuovo allievo", placeholder="Nome e Cognome...", label_visibility="collapsed")
-    if st.button("+ Aggiungi Allievo", use_container_width=True, type="primary"):
-        nome = nuovo_nome.strip()
-        if not nome:
-            st.warning("Inserisci un nome.")
-        elif nome in st.session_state.allievi:
-            st.warning("Questo allievo è già presente.")
-        else:
-            st.session_state.allievi[nome] = {
-                "livello": "", "orario": "", "telefono": "",
-                "data": datetime.now().strftime("%d/%m/%Y"),
-                "bpm": "", "pedale": "", "tocco": "",
-                "tecnica": "", "brani": "", "compiti": "",
-                "storico": []
-            }
-            st.session_state.allievo_selezionato = nome
-            st.rerun()
+    if is_maestro:
+        nuovo_nome = st.text_input("Nome e Cognome...", key="input_nuovo_allievo")
+        if st.button("➕ Aggiungi Allievo", type="primary", use_container_width=True):
+            nome_pulito = nuovo_nome.strip()
+            if nome_pulito:
+                if nome_pulito in allievi:
+                    st.warning("Allievo già presente!")
+                else:
+                    allievi[nome_pulito] = {
+                        "livello": "", "orario": "", "telefono": "",
+                        "data": datetime.now().strftime("%d/%m/%Y"),
+                        "bpm": "", "pedale": "", "tocco": "",
+                        "tecnica": "", "brani": "", "compiti": "",
+                        "storico": []
+                    }
+                    salva_dati_cloud(allievi)
+                    st.session_state["allievo_attivo"] = nome_pulito
+                    st.rerun()
 
     st.divider()
     st.subheader("I tuoi allievi")
     
-    if not st.session_state.allievi:
-        st.caption("Nessun allievo in lista.")
+    lista_nomi = sorted(allievi.keys())
+    if not lista_nomi:
+        st.info("Nessun allievo in lista.")
+        allievo_selezionato = None
     else:
-        for nome in sorted(st.session_state.allievi.keys()):
-            tipo_btn = "primary" if nome == st.session_state.allievo_selezionato else "secondary"
-            if st.button(nome, key=f"btn_{nome}", use_container_width=True, type=tipo_btn):
-                st.session_state.allievo_selezionato = nome
-                st.rerun()
+        indice_default = 0
+        if "allievo_attivo" in st.session_state and st.session_state["allievo_attivo"] in lista_nomi:
+            indice_default = lista_nomi.index(st.session_state["allievo_attivo"])
+        allievo_selezionato = st.radio("Seleziona allievo:", lista_nomi, index=indice_default, label_visibility="collapsed")
+        st.session_state["allievo_attivo"] = allievo_selezionato
 
     st.divider()
-    st.subheader("💾 Salvataggio Dati")
-    json_str = json.dumps(st.session_state.allievi, ensure_ascii=False, indent=4)
-    st.download_button(
-        label="⬇️ Scarica Archivio (.json)",
-        data=json_str,
-        file_name="archivio_allievi.json",
-        mime="application/json",
-        use_container_width=True
-    )
-    file_caricato = st.file_uploader("⬆️ Carica Archivio (.json)", type=["json"])
-    if file_caricato is not None:
-        if st.button("Ripristina dati caricati", use_container_width=True):
-            try:
-                st.session_state.allievi = json.load(file_caricato)
-                st.session_state.allievo_selezionato = next(iter(sorted(st.session_state.allievi.keys())), None)
-                st.success("Archivio ripristinato!")
-                st.rerun()
-            except Exception:
-                st.error("File non valido.")
+    if is_maestro:
+        with st.expander("💾 Backup Manuale (.json)"):
+            json_str = json.dumps(allievi, ensure_ascii=False, indent=4)
+            st.download_button("⬇️ Scarica Archivio", data=json_str, file_name="archivio_allievi.json", mime="application/json", use_container_width=True)
+            
+            file_caricato = st.file_uploader("⬆️ Ripristina da JSON", type=["json"])
+            if file_caricato is not None:
+                if st.button("Conferma Ripristino", use_container_width=True):
+                    dati_importati = json.load(file_caricato)
+                    salva_dati_cloud(dati_importati)
+                    st.success("Archivio ripristinato!")
+                    st.rerun()
 
-st.title("Registro Lezioni di Pianoforte")
+    if st.button("🚪 Esci (Logout)", use_container_width=True):
+        st.session_state["ruolo"] = None
+        st.rerun()
 
-allievo = st.session_state.allievo_selezionato
-
-if not allievo or allievo not in st.session_state.allievi:
-    st.info("👈 Seleziona o crea un allievo dalla barra a sinistra (su tablet/cellulare premi la freccia `>` in alto a sinistra per aprire il menu).")
+# --- 5. AREA PRINCIPALE ---
+if not allievo_selezionato:
+    st.title("Registro Lezioni di Pianoforte")
+    st.info("👈 Seleziona un allievo dalla barra a sinistra (su tablet/cellulare premi la freccia `>` in alto a sinistra per aprire il menu).")
 else:
-    dati = st.session_state.allievi[allievo]
+    dati_allievo = allievi[allievo_selezionato]
     
-    col_titolo, col_storico = st.columns(2)
+    col_titolo, col_storico = st.columns([2, 1])
     with col_titolo:
-        st.subheader(f"Scheda di: {allievo}")
+        st.title(f"Scheda di: {allievo_selezionato}")
     with col_storico:
-        storico = dati.get("storico", [])
-        if storico:
-            opzioni = ["Scheda attuale"] + [f"{i+1}. {item.get('data_salvataggio', 'Senza data')}" for i, item in enumerate(storico)]
-            scelta_storico = st.selectbox("Storico lezioni:", opzioni)
-            if scelta_storico != "Scheda attuale":
-                parti = scelta_storico.split(".")
-                idx = int(parti.pop(0)) - 1
-                dati = storico[idx]
-        else:
-            st.selectbox("Storico lezioni:", ["Nessuna lezione archiviata"], disabled=True)
+        storico = dati_allievo.get("storico", [])
+        opzioni_storico = ["📌 Scheda Attuale (In corso)"] + [
+            f"{i+1}. {item.get('data_salvataggio', 'Senza data')}" for i, item in enumerate(storico)
+        ]
+        scelta_storico = st.selectbox("Storico lezioni:", opzioni_storico)
+
+    if scelta_storico == "📌 Scheda Attuale (In corso)":
+        dati_mostrati = dati_allievo
+        in_storico = False
+    else:
+        indice_st = int(scelta_storico.split(".")[0]) - 1
+        dati_mostrati = storico[indice_st]
+        in_storico = True
+        st.warning(f"Stai visualizzando una lezione archiviata ({scelta_storico}).")
+
+    disabilitato = (not is_maestro) or in_storico
 
     c1, c2, c3, c4 = st.columns(4)
-    livello = c1.text_input("Livello / Corso:", value=dati.get("livello", ""), placeholder="Es. Base, 2 Anno...")
-    orario = c2.text_input("Giorno e Ora Fissa:", value=dati.get("orario", ""), placeholder="Es. Giovedi 16:30")
-    telefono = c3.text_input("Telefono / Contatto:", value=dati.get("telefono", ""), placeholder="Es. 333 1234567")
-    data_lez = c4.text_input("Data Lezione:", value=dati.get("data", ""), placeholder="Es. 20/11/2026")
+    livello = c1.text_input("Livello / Corso:", value=dati_mostrati.get("livello", ""), placeholder="Es. Base, 2° Anno...", disabled=disabilitato)
+    orario = c2.text_input("Giorno e Ora Fissa:", value=dati_mostrati.get("orario", ""), placeholder="Es. Giovedì 16:30", disabled=disabilitato)
+    if is_maestro:
+        telefono = c3.text_input("Telefono / Contatto:", value=dati_mostrati.get("telefono", ""), placeholder="Es. 333 1234567", disabled=disabilitato)
+    else:
+        telefono = dati_mostrati.get("telefono", "")
+        c3.text_input("Telefono:", value="Riservato", disabled=True)
+    data_lez = c4.text_input("Data Lezione:", value=dati_mostrati.get("data", ""), placeholder="Es. 20/11/2026", disabled=disabilitato)
 
     st.markdown("---")
-    k1, k2, k3 = st.columns(3)
-    bpm = k1.text_input("Metronomo (BPM):", value=dati.get("bpm", ""), placeholder="Es. 72 -> 84 BPM")
-    pedale = k2.text_input("Uso Pedale:", value=dati.get("pedale", ""), placeholder="Es. Legato / Mezzo pedale")
-    tocco = k3.text_input("Focus Tocco (Tasti Pesati):", value=dati.get("tocco", ""), placeholder="Es. Peso braccio / Polso morbido")
+    t1, t2, t3 = st.columns(3)
+    bpm = t1.text_input("Metronomo (BPM):", value=dati_mostrati.get("bpm", ""), placeholder="Es. 72 -> 84 BPM", disabled=disabilitato)
+    pedale = t2.text_input("Uso Pedale:", value=dati_mostrati.get("pedale", ""), placeholder="Es. Legato / Mezzo pedale", disabled=disabilitato)
+    tocco = t3.text_input("Focus Tocco (Tasti Pesati):", value=dati_mostrati.get("tocco", ""), placeholder="Es. Peso braccio / Polso morbido", disabled=disabilitato)
 
-    tecnica = st.text_area("Tecnica, Scale ed Esercizi:", value=dati.get("tecnica", ""), height=100)
-    brani = st.text_area("Brani in Studio e Obiettivi della Lezione:", value=dati.get("brani", ""), height=130)
-    compiti = st.text_area("Compiti per Casa (ogni riga diventa una casella da spuntare sul PDF):", value=dati.get("compiti", ""), height=130)
-
-    scheda_aggiornata = {
-        "livello": livello.strip(),
-        "orario": orario.strip(),
-        "telefono": telefono.strip(),
-        "data": data_lez.strip(),
-        "bpm": bpm.strip(),
-        "pedale": pedale.strip(),
-        "tocco": tocco.strip(),
-        "tecnica": tecnica.strip(),
-        "brani": brani.strip(),
-        "compiti": compiti.strip(),
-        "storico": st.session_state.allievi[allievo].get("storico", [])
-    }
-
-    b1, b2, b3, b4 = st.columns([1.2, 1.5, 1.5, 1])
-    
-    if b1.button("💾 Salva Scheda", use_container_width=True, type="primary"):
-        st.session_state.allievi[allievo] = scheda_aggiornata
-        st.success(f"Scheda di {allievo} aggiornata!")
-
-    if b2.button("📚 Archivia nello Storico", use_container_width=True):
-        etichetta_data = scheda_aggiornata["data"] if scheda_aggiornata["data"] else datetime.now().strftime("%d/%m/%Y %H:%M")
-        copia_lezione = {k: v for k, v in scheda_aggiornata.items() if k != "storico"}
-        copia_lezione["data_salvataggio"] = etichetta_data
-        scheda_aggiornata["storico"].append(copia_lezione)
-        st.session_state.allievi[allievo] = scheda_aggiornata
-        st.success(f"Lezione del '{etichetta_data}' archiviata!")
-        st.rerun()
-
-    pdf_bytes = genera_pdf_bytes(allievo, scheda_aggiornata)
-    nome_pulito = "".join(c for c in allievo if c.isalnum() or c in (" ", "_")).rstrip().replace(" ", "_")
-    b3.download_button(
-        label="📄 Scarica / Stampa PDF",
-        data=pdf_bytes,
-        file_name=f"Lezione_{nome_pulito}.pdf",
-        mime="application/pdf",
-        use_container_width=True
-    )
-
-    if b4.button("🗑️ Elimina", use_container_width=True):
-        del st.session_state.allievi[allievo]
-        st.session_state.allievo_selezionato = None
-        st.rerun()
