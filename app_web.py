@@ -223,4 +223,152 @@ with st.sidebar:
 
     st.divider()
     
-    with st.expander("🔑 Cambia la mia Password"):
+       with st.expander("🔑 Cambia la mia Password"):
+        nuova_pass = st.text_input("Nuova password:", type="password", key="change_pwd_1")
+        conferma_pass = st.text_input("Ripeti nuova password:", type="password", key="change_pwd_2")
+        if st.button("Aggiorna Password", use_container_width=True):
+            np = nuova_pass.strip()
+            if not np:
+                st.error("La password non può essere vuota.")
+            elif np != conferma_pass.strip():
+                st.error("Le due password non coincidono.")
+            else:
+                gia_usata = (np == db["_config"].get("password_maestro")) or any(
+                    info.get("password") == np for k, info in allievi.items() if k != allievo_selezionato
+                )
+                if gia_usata:
+                    st.error("Questa password non è disponibile, scegline un'altra.")
+                else:
+                    if is_maestro:
+                        db["_config"]["password_maestro"] = np
+                    else:
+                        db["allievi"][allievo_selezionato]["password"] = np
+                    salva_dati_cloud(db)
+                    st.success("✅ Password aggiornata con successo!")
+
+    if is_maestro:
+        with st.expander("💾 Backup Manuale (.json)"):
+            json_str = json.dumps(db, ensure_ascii=False, indent=4)
+            st.download_button("⬇️ Scarica Archivio", data=json_str, file_name="archivio_conservatorio.json", mime="application/json", use_container_width=True)
+            
+            file_caricato = st.file_uploader("⬆️ Ripristina da JSON", type=["json"])
+            if file_caricato is not None:
+                if st.button("Conferma Ripristino", use_container_width=True):
+                    dati_importati = json.load(file_caricato)
+                    if "_config" not in dati_importati:
+                        dati_importati = {
+                            "_config": {"password_maestro": db["_config"]["password_maestro"]},
+                            "allievi": dati_importati
+                        }
+                    salva_dati_cloud(dati_importati)
+                    st.success("Archivio ripristinato!")
+                    st.rerun()
+
+    if st.button("🚪 Esci (Logout)", use_container_width=True):
+        st.session_state["ruolo"] = None
+        st.session_state["utente_loggato"] = None
+        st.rerun()
+
+# --- 5. AREA PRINCIPALE ---
+if not allievo_selezionato:
+    st.title("Registro Lezioni di Pianoforte")
+    st.info("👈 Crea o seleziona un allievo dalla barra a sinistra.")
+else:
+    dati_allievo = allievi[allievo_selezionato]
+    
+    col_titolo, col_storico = st.columns([2, 1])
+    with col_titolo:
+        st.title(f"Piano di Studio: {allievo_selezionato}")
+    with col_storico:
+        storico = dati_allievo.get("storico", [])
+        opzioni_storico = ["📌 Scheda Attuale (In corso)"] + [
+            f"{i+1}. {item.get('data_salvataggio', 'Senza data')}" for i, item in enumerate(storico)
+        ]
+        scelta_storico = st.selectbox("Storico lezioni:", opzioni_storico)
+
+    if scelta_storico == "📌 Scheda Attuale (In corso)":
+        dati_mostrati = dati_allievo
+        in_storico = False
+    else:
+        indice_st = int(scelta_storico.split(".")[0]) - 1
+        dati_mostrati = storico[indice_st]
+        in_storico = True
+        st.warning(f"Stai visualizzando una lezione archiviata ({scelta_storico}).")
+
+    disabilitato = (not is_maestro) or in_storico
+
+    if is_maestro:
+        with st.expander("🔐 Gestione Password di questo Allievo"):
+            pwd_corrente_allievo = st.text_input(
+                "Password attuale dell'allievo (puoi vederla o reimpostarla qui se la dimentica):",
+                value=dati_allievo.get("password", ""),
+                disabled=in_storico
+            )
+    else:
+        pwd_corrente_allievo = dati_allievo.get("password", "")
+
+    c1, c2, c3, c4 = st.columns(4)
+    livello = c1.text_input("Livello / Corso:", value=dati_mostrati.get("livello", ""), placeholder="Es. Triennio, Propedeutico...", disabled=disabilitato)
+    orario = c2.text_input("Giorno e Ora Fissa:", value=dati_mostrati.get("orario", ""), placeholder="Es. Giovedì 16:30", disabled=disabilitato)
+    telefono = c3.text_input("Telefono / Contatto:", value=dati_mostrati.get("telefono", ""), placeholder="Es. 333 1234567", disabled=disabilitato)
+    data_lez = c4.text_input("Data Lezione:", value=dati_mostrati.get("data", ""), placeholder="Es. 22/11/2026", disabled=disabilitato)
+
+    st.markdown("---")
+    t1, t2, t3 = st.columns(3)
+    bpm = t1.text_input("Metronomo (BPM):", value=dati_mostrati.get("bpm", ""), placeholder="Es. 72 -> 84 BPM", disabled=disabilitato)
+    pedale = t2.text_input("Uso Pedale:", value=dati_mostrati.get("pedale", ""), placeholder="Es. Legato / Mezzo pedale", disabled=disabilitato)
+    tocco = t3.text_input("Focus Tocco (Tasti Pesati):", value=dati_mostrati.get("tocco", ""), placeholder="Es. Peso braccio / Polso morbido", disabled=disabilitato)
+
+    tecnica = st.text_area("Tecnica, Scale ed Esercizi:", value=dati_mostrati.get("tecnica", ""), height=100, disabled=disabilitato)
+    brani = st.text_area("Brani in Studio e Obiettivi della Lezione:", value=dati_mostrati.get("brani", ""), height=130, disabled=disabilitato)
+    compiti = st.text_area("Compiti per Casa (ogni riga diventa una casella da spuntare sul PDF):", value=dati_mostrati.get("compiti", ""), height=130, disabled=disabilitato)
+
+    st.markdown("---")
+    
+    b1, b2, b3, b4 = st.columns([1.2, 1.4, 1.4, 1])
+    
+    pdf_pronto = crea_pdf_bytes(allievo_selezionato, {
+        "livello": livello, "orario": orario, "data": data_lez,
+        "bpm": bpm, "pedale": pedale, "tocco": tocco,
+        "tecnica": tecnica, "brani": brani, "compiti": compiti
+    })
+    nome_file_pdf = f"Lezione_{allievo_selezionato.replace(' ', '_')}.pdf"
+    b3.download_button("📄 Scarica PDF Lezione", data=pdf_pronto, file_name=nome_file_pdf, mime="application/pdf", use_container_width=True)
+
+    if is_maestro and not in_storico:
+        if b1.button("💾 Salva Scheda", type="primary", use_container_width=True):
+            db["allievi"][allievo_selezionato] = {
+                "password": pwd_corrente_allievo.strip(),
+                "livello": livello, "orario": orario, "telefono": telefono,
+                "data": data_lez, "bpm": bpm, "pedale": pedale, "tocco": tocco,
+                "tecnica": tecnica, "brani": brani, "compiti": compiti,
+                "storico": dati_allievo.get("storico", [])
+            }
+            salva_dati_cloud(db)
+            st.success(f"Scheda di {allievo_selezionato} salvata!")
+
+        if b2.button("📚 Archivia nello Storico", use_container_width=True):
+            etichetta_data = data_lez.strip() if data_lez.strip() else datetime.now().strftime("%d/%m/%Y %H:%M")
+            copia_lezione = {
+                "livello": livello, "orario": orario, "telefono": telefono,
+                "data": data_lez, "bpm": bpm, "pedale": pedale, "tocco": tocco,
+                "tecnica": tecnica, "brani": brani, "compiti": compiti,
+                "data_salvataggio": etichetta_data
+            }
+            storico_att = dati_allievo.get("storico", [])
+            storico_att.append(copia_lezione)
+            db["allievi"][allievo_selezionato] = {
+                **copia_lezione,
+                "password": pwd_corrente_allievo.strip(),
+                "storico": storico_att
+            }
+            salva_dati_cloud(db)
+            st.success(f"Lezione del {etichetta_data} archiviata nello storico!")
+            st.rerun()
+
+        if b4.button("🗑️ Elimina Allievo", use_container_width=True):
+            del db["allievi"][allievo_selezionato]
+            salva_dati_cloud(db)
+            st.session_state["allievo_attivo"] = None
+            st.rerun()
+ 
