@@ -4,34 +4,9 @@ import requests
 from datetime import datetime
 from fpdf import FPDF
 
-# Configurazione pagina
 st.set_page_config(page_title="Registro Lezioni di Pianoforte", page_icon="🎹", layout="wide")
 
-# --- 1. GESTIONE LOGIN TRAMITE SECRETS ---
-def controlla_accesso():
-    if "ruolo" not in st.session_state:
-        st.session_state["ruolo"] = None
-
-    if st.session_state["ruolo"] is None:
-        st.title("🎹 Registro Lezioni di Pianoforte")
-        st.subheader("Accesso Riservato")
-        
-        pwd = st.text_input("Inserisci la password di accesso:", type="password")
-        if st.button("Accedi", type="primary"):
-            if pwd == st.secrets["password_maestro"]:
-                st.session_state["ruolo"] = "maestro"
-                st.rerun()
-            elif pwd == st.secrets["password_studente"]:
-                st.session_state["ruolo"] = "studente"
-                st.rerun()
-            else:
-                st.error("❌ Password errata. Riprova.")
-        st.stop()
-
-controlla_accesso()
-is_maestro = (st.session_state["ruolo"] == "maestro")
-
-# --- 2. DATABASE PERMANENTE SU GITHUB GIST ---
+# --- 1. CONNESSIONE AL DATABASE GITHUB GIST ---
 GIST_ID = st.secrets["gist_id"]
 GITHUB_TOKEN = st.secrets["github_token"]
 FILENAME = "archivio_allievi.json"
@@ -41,27 +16,39 @@ HEADERS = {
 }
 
 def carica_dati():
-    if "allievi" not in st.session_state:
+    if "db" not in st.session_state:
         try:
             url = f"https://github.com{GIST_ID}"
             res = requests.get(url, headers=HEADERS)
             if res.status_code == 200:
                 contenuto = res.json()["files"][FILENAME]["content"]
-                st.session_state["allievi"] = json.loads(contenuto)
+                dati_grezzi = json.loads(contenuto)
+                if "_config" not in dati_grezzi:
+                    dati_grezzi = {
+                        "_config": {"password_maestro": st.secrets["password_maestro_iniziale"]},
+                        "allievi": dati_grezzi
+                    }
+                st.session_state["db"] = dati_grezzi
             else:
-                st.session_state["allievi"] = {}
+                st.session_state["db"] = {
+                    "_config": {"password_maestro": st.secrets["password_maestro_iniziale"]},
+                    "allievi": {}
+                }
         except Exception as e:
             st.error(f"Errore di connessione al database: {e}")
-            st.session_state["allievi"] = {}
-    return st.session_state["allievi"]
+            st.session_state["db"] = {
+                "_config": {"password_maestro": st.secrets["password_maestro_iniziale"]},
+                "allievi": {}
+            }
+    return st.session_state["db"]
 
-def salva_dati_cloud(dati_aggiornati):
-    st.session_state["allievi"] = dati_aggiornati
+def salva_dati_cloud(db_aggiornato):
+    st.session_state["db"] = db_aggiornato
     url = f"https://github.com{GIST_ID}"
     payload = {
         "files": {
             FILENAME: {
-                "content": json.dumps(dati_aggiornati, ensure_ascii=False, indent=4)
+                "content": json.dumps(db_aggiornato, ensure_ascii=False, indent=4)
             }
         }
     }
@@ -69,7 +56,72 @@ def salva_dati_cloud(dati_aggiornati):
     if res.status_code != 200:
         st.error("⚠️ Errore durante il salvataggio online!")
 
-allievi = carica_dati()
+db = carica_dati()
+allievi = db["allievi"]
+
+# --- 2. SISTEMA DI LOGIN E RECUPERO PASSWORD ---
+def controlla_accesso():
+    if "ruolo" not in st.session_state:
+        st.session_state["ruolo"] = None
+        st.session_state["utente_loggato"] = None
+
+    if st.session_state["ruolo"] is None:
+        st.title("🎹 Registro Lezioni di Pianoforte")
+        st.subheader("Accesso Riservato - Conservatorio")
+        
+        pwd = st.text_input("Inserisci la tua password personale:", type="password")
+        if st.button("Accedi", type="primary"):
+            pwd_pulita = pwd.strip()
+            pwd_maestro_attuale = db["_config"].get("password_maestro", st.secrets["password_maestro_iniziale"])
+            
+            # 1. Controlla se è il Maestro
+            if pwd_pulita and pwd_pulita == pwd_maestro_attuale:
+                st.session_state["ruolo"] = "maestro"
+                st.session_state["utente_loggato"] = "Maestro"
+                st.rerun()
+            
+            # 2. Controlla se è un Allievo
+            allievo_trovato = None
+            for nome_allievo, info in allievi.items():
+                pwd_allievo = info.get("password", "").strip()
+                if pwd_pulita and pwd_allievo and pwd_pulita == pwd_allievo:
+                    allievo_trovato = nome_allievo
+                    break
+            
+            if allievo_trovato:
+                st.session_state["ruolo"] = "studente"
+                st.session_state["utente_loggato"] = allievo_trovato
+                st.rerun()
+            else:
+                st.error("❌ Password non riconosciuta. Controlla di averla scritta correttamente.")
+
+        st.markdown("---")
+        # Pannello di recupero password dimenticata
+        with st.expander("❓ Hai dimenticato la password?"):
+            st.info("👨‍🎓 **Sei un Allievo?** Chiedi al Maestro durante la lezione o via messaggio: può visualizzare o reimpostare la tua password in pochi secondi dalla sua area riservata.")
+            
+            st.markdown("🎼 **Sei il Maestro?** Inserisci il Codice di Emergenza (PIN) per impostare una nuova password:")
+            pin_inserito = st.text_input("Codice di Emergenza (PIN):", type="password", key="pin_reset")
+            nuova_pwd_maestro = st.text_input("Nuova password Maestro:", type="password", key="new_pwd_reset")
+            conferma_pwd_maestro = st.text_input("Ripeti nuova password Maestro:", type="password", key="conf_pwd_reset")
+            
+            if st.button("Reimposta Password Maestro"):
+                pin_corretto = st.secrets.get("pin_recupero_maestro", "")
+                if not pin_corretto or pin_inserito.strip() != pin_corretto:
+                    st.error("❌ Codice di emergenza errato.")
+                elif not nuova_pwd_maestro.strip():
+                    st.error("❌ Inserisci una nuova password valida.")
+                elif nuova_pwd_maestro.strip() != conferma_pwd_maestro.strip():
+                    st.error("❌ Le due password non coincidono.")
+                else:
+                    db["_config"]["password_maestro"] = nuova_pwd_maestro.strip()
+                    salva_dati_cloud(db)
+                    st.success("✅ Password Maestro reimpostata con successo! Ora puoi accedere qui sopra.")
+
+        st.stop()
+
+controlla_accesso()
+is_maestro = (st.session_state["ruolo"] == "maestro")
 
 # --- 3. GENERAZIONE PDF ---
 def pulisci_testo_pdf(testo):
@@ -129,101 +181,43 @@ def crea_pdf_bytes(nome_allievo, dati):
 
 # --- 4. BARRA LATERALE ---
 with st.sidebar:
-    st.title("🎹 Allievi")
-    st.caption(f"Accesso effettuato come: **{st.session_state['ruolo'].upper()}**")
-    
     if is_maestro:
-        nuovo_nome = st.text_input("Nome e Cognome...", key="input_nuovo_allievo")
+        st.title("🎹 Area Maestro")
+        nuovo_nome = st.text_input("Nome e Cognome Allievo...", key="input_nuovo_allievo")
+        nuova_pwd_allievo = st.text_input("Password iniziale per l'allievo...", key="input_pwd_allievo")
+        
         if st.button("➕ Aggiungi Allievo", type="primary", use_container_width=True):
             nome_pulito = nuovo_nome.strip()
-            if nome_pulito:
-                if nome_pulito in allievi:
-                    st.warning("Allievo già presente!")
-                else:
-                    allievi[nome_pulito] = {
-                        "livello": "", "orario": "", "telefono": "",
-                        "data": datetime.now().strftime("%d/%m/%Y"),
-                        "bpm": "", "pedale": "", "tocco": "",
-                        "tecnica": "", "brani": "", "compiti": "",
-                        "storico": []
-                    }
-                    salva_dati_cloud(allievi)
-                    st.session_state["allievo_attivo"] = nome_pulito
-                    st.rerun()
+            pwd_all_pulita = nuova_pwd_allievo.strip()
+            if not nome_pulito:
+                st.warning("Inserisci il nome dell'allievo.")
+            elif nome_pulito in allievi:
+                st.warning("Allievo già presente!")
+            else:
+                db["allievi"][nome_pulito] = {
+                    "password": pwd_all_pulita,
+                    "livello": "", "orario": "", "telefono": "",
+                    "data": datetime.now().strftime("%d/%m/%Y"),
+                    "bpm": "", "pedale": "", "tocco": "",
+                    "tecnica": "", "brani": "", "compiti": "",
+                    "storico": []
+                }
+                salva_dati_cloud(db)
+                st.session_state["allievo_attivo"] = nome_pulito
+                st.rerun()
 
-    st.divider()
-    st.subheader("I tuoi allievi")
-    
-    lista_nomi = sorted(allievi.keys())
-    if not lista_nomi:
-        st.info("Nessun allievo in lista.")
-        allievo_selezionato = None
+        st.divider()
+        st.subheader("I tuoi allievi")
+        lista_nomi = sorted(allievi.keys())
+        if not lista_nomi:
+            st.info("Nessun allievo in lista.")
+            allievo_selezionato = None
+        else:
+            indice_default = 0
+            if "allievo_attivo" in st.session_state and st.session_state["allievo_attivo"] in lista_nomi:
+                indice_default = lista_nomi.index(st.session_state["allievo_attivo"])
+            allievo_selezionato = st.radio("Seleziona allievo:", lista_nomi, index=indice_default, label_visibility="collapsed")
+            st.session_state["allievo_attivo"] = allievo_selezionato
     else:
-        indice_default = 0
-        if "allievo_attivo" in st.session_state and st.session_state["allievo_attivo"] in lista_nomi:
-            indice_default = lista_nomi.index(st.session_state["allievo_attivo"])
-        allievo_selezionato = st.radio("Seleziona allievo:", lista_nomi, index=indice_default, label_visibility="collapsed")
-        st.session_state["allievo_attivo"] = allievo_selezionato
-
-    st.divider()
-    if is_maestro:
-        with st.expander("💾 Backup Manuale (.json)"):
-            json_str = json.dumps(allievi, ensure_ascii=False, indent=4)
-            st.download_button("⬇️ Scarica Archivio", data=json_str, file_name="archivio_allievi.json", mime="application/json", use_container_width=True)
-            
-            file_caricato = st.file_uploader("⬆️ Ripristina da JSON", type=["json"])
-            if file_caricato is not None:
-                if st.button("Conferma Ripristino", use_container_width=True):
-                    dati_importati = json.load(file_caricato)
-                    salva_dati_cloud(dati_importati)
-                    st.success("Archivio ripristinato!")
-                    st.rerun()
-
-    if st.button("🚪 Esci (Logout)", use_container_width=True):
-        st.session_state["ruolo"] = None
-        st.rerun()
-
-# --- 5. AREA PRINCIPALE ---
-if not allievo_selezionato:
-    st.title("Registro Lezioni di Pianoforte")
-    st.info("👈 Seleziona un allievo dalla barra a sinistra (su tablet/cellulare premi la freccia `>` in alto a sinistra per aprire il menu).")
-else:
-    dati_allievo = allievi[allievo_selezionato]
-    
-    col_titolo, col_storico = st.columns([2, 1])
-    with col_titolo:
-        st.title(f"Scheda di: {allievo_selezionato}")
-    with col_storico:
-        storico = dati_allievo.get("storico", [])
-        opzioni_storico = ["📌 Scheda Attuale (In corso)"] + [
-            f"{i+1}. {item.get('data_salvataggio', 'Senza data')}" for i, item in enumerate(storico)
-        ]
-        scelta_storico = st.selectbox("Storico lezioni:", opzioni_storico)
-
-    if scelta_storico == "📌 Scheda Attuale (In corso)":
-        dati_mostrati = dati_allievo
-        in_storico = False
-    else:
-        indice_st = int(scelta_storico.split(".")[0]) - 1
-        dati_mostrati = storico[indice_st]
-        in_storico = True
-        st.warning(f"Stai visualizzando una lezione archiviata ({scelta_storico}).")
-
-    disabilitato = (not is_maestro) or in_storico
-
-    c1, c2, c3, c4 = st.columns(4)
-    livello = c1.text_input("Livello / Corso:", value=dati_mostrati.get("livello", ""), placeholder="Es. Base, 2° Anno...", disabled=disabilitato)
-    orario = c2.text_input("Giorno e Ora Fissa:", value=dati_mostrati.get("orario", ""), placeholder="Es. Giovedì 16:30", disabled=disabilitato)
-    if is_maestro:
-        telefono = c3.text_input("Telefono / Contatto:", value=dati_mostrati.get("telefono", ""), placeholder="Es. 333 1234567", disabled=disabilitato)
-    else:
-        telefono = dati_mostrati.get("telefono", "")
-        c3.text_input("Telefono:", value="Riservato", disabled=True)
-    data_lez = c4.text_input("Data Lezione:", value=dati_mostrati.get("data", ""), placeholder="Es. 20/11/2026", disabled=disabilitato)
-
-    st.markdown("---")
-    t1, t2, t3 = st.columns(3)
-    bpm = t1.text_input("Metronomo (BPM):", value=dati_mostrati.get("bpm", ""), placeholder="Es. 72 -> 84 BPM", disabled=disabilitato)
-    pedale = t2.text_input("Uso Pedale:", value=dati_mostrati.get("pedale", ""), placeholder="Es. Legato / Mezzo pedale", disabled=disabilitato)
-    tocco = t3.text_input("Focus Tocco (Tasti Pesati):", value=dati_mostrati.get("tocco", ""), placeholder="Es. Peso braccio / Polso morbido", disabled=disabilitato)
-
+        allievo_selezionato = st.session_state["utente_loggato"]
+        st.title("🎹 Area Allievo")
