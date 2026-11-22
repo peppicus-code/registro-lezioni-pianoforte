@@ -18,7 +18,7 @@ HEADERS = {
 def carica_dati():
     if "db" not in st.session_state:
         try:
-            url = f"https://github.com{GIST_ID}"
+            url = "https://github.com" + GIST_ID
             res = requests.get(url, headers=HEADERS)
             if res.status_code == 200:
                 contenuto = res.json()["files"][FILENAME]["content"]
@@ -44,7 +44,7 @@ def carica_dati():
 
 def salva_dati_cloud(db_aggiornato):
     st.session_state["db"] = db_aggiornato
-    url = f"https://github.com{GIST_ID}"
+    url = "https://github.com" + GIST_ID
     payload = {
         "files": {
             FILENAME: {
@@ -74,13 +74,11 @@ def controlla_accesso():
             pwd_pulita = pwd.strip()
             pwd_maestro_attuale = db["_config"].get("password_maestro", st.secrets["password_maestro_iniziale"])
             
-            # 1. Controlla se è il Maestro
             if pwd_pulita and pwd_pulita == pwd_maestro_attuale:
                 st.session_state["ruolo"] = "maestro"
                 st.session_state["utente_loggato"] = "Maestro"
                 st.rerun()
             
-            # 2. Controlla se è un Allievo
             allievo_trovato = None
             for nome_allievo, info in allievi.items():
                 pwd_allievo = info.get("password", "").strip()
@@ -96,7 +94,6 @@ def controlla_accesso():
                 st.error("❌ Password non riconosciuta. Controlla di averla scritta correttamente.")
 
         st.markdown("---")
-        # Pannello di recupero password dimenticata
         with st.expander("❓ Hai dimenticato la password?"):
             st.info("👨‍🎓 **Sei un Allievo?** Chiedi al Maestro durante la lezione o via messaggio: può visualizzare o reimpostare la tua password in pochi secondi dalla sua area riservata.")
             
@@ -221,3 +218,9 @@ with st.sidebar:
     else:
         allievo_selezionato = st.session_state["utente_loggato"]
         st.title("🎹 Area Allievo")
+        st.success(f"Benvenuto/a,\n**{allievo_selezionato}**")
+        st.caption("Stai visualizzando esclusivamente il tuo piano di studio personale.")
+
+    st.divider()
+    
+    with st.expander("🔑 Cambia la mia Password"):
